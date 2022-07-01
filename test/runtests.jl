@@ -26,10 +26,8 @@ using Test
     GC.gc()
     @test_logs(
         (:warn, "Cannot create finalizer for MyType{$Int}. Global dictionary must be manually deleted."),
-        @metadata!(x)
+        @metadata!(x, Dict(:x => 1, :y => 2))
     )
-    @metadata!(x, :x, 1)
-    @metadata!(x, :y, 2)
     @test @metadata(x, :x) == 1
     @test @metadata(x, :y) == 2
 end

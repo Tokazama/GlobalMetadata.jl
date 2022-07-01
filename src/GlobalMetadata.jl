@@ -46,23 +46,26 @@ function has_global_metadata(m::Module, x, k)
 end
 
 """
-    @has_metadata()::Bool
     @has_metadata(x)::Bool
     @has_metadata(x, k)::Bool
 
 Does `x` have metadata stored in the curren modules' global metadata? Checks for the
-
 presenece of the key `k` if specified.
 """
-macro has_metadata()
-    esc(:(GlobalMetadata.has_global_metadata(@__MODULE__)))
-end
+
 macro has_metadata(x)
     esc(:(GlobalMetadata.has_global_metadata(@__MODULE__, x)))
 end
 macro has_metadata(x, k)
     esc(:(GlobalMetadata.has_global_metadata(@__MODULE__, x, k)))
 end
+
+#=
+    @has_metadata()::Bool
+macro has_metadata()
+    esc(:(GlobalMetadata.has_global_metadata(@__MODULE__)))
+end
+=#
 
 # global_metadata!
 function init_global_metadata!(m::Module, data=no_data)
@@ -118,10 +121,24 @@ function _assign_global_metadata_finalizer(x, gm, id)
 end
 global_metadata!(m::Module, x, k, val) = get!(global_metadata(m, x), k, val)
 
-# @metadata!()
+"""
+    @metadata!(x[data = Dict{Symbol,Any}()])
+
+Initializes global metadata for `x` to `data`. If `data` is not provided then the default is
+`Dict{Symbol,Any}()`.
+"""
 macro metadata!(x)
     esc(:(GlobalMetadata.global_metadata!(@__MODULE__, $(x))))
 end
+macro metadata!(x, data)
+    esc(:(GlobalMetadata.global_metadata!(@__MODULE__, $(x), $(data))))
+end
+
+"""
+    @metadata!(x, k, val)
+
+Set the value of `x`'s global metadata associated with the key `k` to `val`.
+"""
 macro metadata!(x, k, val)
     esc(:(GlobalMetadata.global_metadata!(@__MODULE__, $(x), $(k), $(val))))
 end
