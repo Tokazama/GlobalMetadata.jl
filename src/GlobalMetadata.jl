@@ -32,42 +32,80 @@ Base.getproperty(p::ModuleProxy, s::Symbol, order::Symbol) = getproperty(proxy_o
 
 DataAPI.metadatasupport(T::Type{<:ModuleProxy}) = getglobal(T()(), SUPPORT)
 
+@noinline function throw_read_error(m::Module)
+    throw(ArgumentError("Module $(m)'s metadata does not support read access."))
+end
+@noinline function throw_write_error(m::Module)
+    throw(ArgumentError("Module $(m)'s metadata does not support write access."))
+end
+
 function DataAPI.metadata(p::ModuleProxy, key::AbstractString; style::Bool=false)
     DataAPI.metadata(p, Symbol(key); style=style)
 end
 @inline function DataAPI.metadata(p::ModuleProxy, key::Symbol; style::Bool=false)
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).read || throw_read_error(mod)
     if style
-        return (getglobal(proxy_of(p), META)[key], :default)
+        return (getglobal(mod, META)[key], :default)
     else
-        return getglobal(proxy_of(p), META)[key]
+        return getglobal(mod, META)[key]
     end
 end
 function DataAPI.metadata(p::ModuleProxy, key::AbstractString, default; style::Bool=false)
     DataAPI.metadata(p, Symbol(key), default; style=style)
 end
 @inline function DataAPI.metadata(p::ModuleProxy, key::Symbol, default; style::Bool=false)
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).read || throw_read_error(mod)
     if style
-        return (get(getglobal(proxy_of(p), META), key, default), :default)
+        return (get(getglobal(mod, META), key, default), :default)
     else
-        return get(getglobal(proxy_of(p), META), key, default)
+        return get(getglobal(mod, META), key, default)
     end
 end
-DataAPI.metadatakeys(p::ModuleProxy) = keys(getglobal(proxy_of(p), META))
-
+function DataAPI.metadatakeys(p::ModuleProxy)
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).read || throw_read_error(mod)
+    keys(getglobal(mod, META))
+end
 function DataAPI.metadata!(p::ModuleProxy, key::AbstractString, value; style::Symbol=:default)
     DataAPI.metadata!(p, Symbol(key), value)
 end
 function DataAPI.metadata!(p::ModuleProxy, key::Symbol, value; style::Symbol=:default)
-    setindex!(getglobal(proxy_of(p), META), value, key)
+    setindex!(getglobal(mod, META), value, key)
 end
-
 function DataAPI.deletemetadata!(p::ModuleProxy, key::AbstractString)
-    DataAPI.deletemetadata!(getglobal(proxy_of(p), META), Symbol(key))
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).write || throw_write_error(mod)
+    DataAPI.deletemetadata!(getglobal(mod, META), Symbol(key))
 end
-DataAPI.deletemetadata!(p::ModuleProxy, key::Symbol) = delete!(getglobal(proxy_of(p), META), key)
-DataAPI.emptymetadata!(p::ModuleProxy) = empty!(delete!(getglobal(proxy_of(p), META), key))
+function DataAPI.deletemetadata!(p::ModuleProxy, key::Symbol)
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).write || throw_write_error(mod)
+    delete!(getglobal(mod, META), key)
+end
+function DataAPI.emptymetadata!(p::ModuleProxy)
+    mod = proxy_of(p)
+    getglobal(mod, SUPPORT).write || throw_write_error(mod)
+    empty!(delete!(getglobal(mod, META), key))
+end
 
 @nospecialize
+"""
+    GlobalMetadata.init(mod::Module[, md::AbstractDict{Symbol}; read::Bool=true, write::Bool=false])
+
+Creates a constant global variable within `mod` to `This` (i.e., `mod.This`) whose value is
+an instance of `ModuleProxy`. `mod.This` acts as a proxy for `mod` (`propertynames(mod) ==
+propertynames(mod.This)`, `getproperty(mod, name) == getproperty(mod.This, name)`), The
+instance of `This` generated is unique to `mod` without direclty storing any field data.
+
+If the metadata argument is present, `md` will be made accessible through the metadata API
+provided by the `DataAPI` package (e.g., `DataAPI.metadata(mod.This, key)`). The keyword
+arguments (`read`, `write`) are used to specify what metadata accessing methods are supported.
+
+`GlobalMetadata.init(mod)` and `GlobalMetadata.init(mod, md; read write)` may be called seperately,
+providing access to `mod.This` with subsequent binding to global metadata in the module.
+"""
 function init(m::Module)
     if !isdefined(m, META)
         Core.eval(m, _this_expr(m))
@@ -76,8 +114,8 @@ function init(m::Module)
 end
 function init(
     m::Module,
-    md::Union{AbstractDict{Symbol, Any}, NamedTuple};
-    read::Bool = false,
+    md::Union{AbstractDict{Symbol}, NamedTuple};
+    read::Bool = true,
     write::Bool = false,
 )
     if !isdefined(m, META)
