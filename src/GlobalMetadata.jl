@@ -6,6 +6,8 @@ if !isdefined(Base, :getglobal)
     const getglobal = getfield
 end
 
+struct Undefined end
+
 const META = gensym(:metadata)
 const SUPPORT = gensym(:support)
 
@@ -18,17 +20,17 @@ struct ModuleProxy{proxy}
 end
 
 @static if VERSION < v"1.10"
-    proxy_of(::ModuleProxy{M}) where {M} = M()::Module
-    _this_expr(m::Module) = :(const This = $(_ModuleProxy)(() -> $(m)))
+    _proxy_of(::ModuleProxy{M}) where {M} = M()::Module
+    _this_expr(m::Module) = :($(_ModuleProxy)(() -> $(m)))
 else
-    proxy_of(::ModuleProxy{M}) where {M} = M::Module
-    _this_expr(m::Module) = :(const This = $(_ModuleProxy)($(m)))
+    _proxy_of(::ModuleProxy{M}) where {M} = M::Module
+    _this_expr(m::Module) = :($(_ModuleProxy)($(m)))
 end
 
-Base.propertynames(p::ModuleProxy) = names(proxy_of(p))
-Base.hasproperty(p::ModuleProxy, s::Symbol) = isdefined(proxy_of(p), s)
-Base.getproperty(p::ModuleProxy, s::Symbol) = getproperty(proxy_of(p), s)
-Base.getproperty(p::ModuleProxy, s::Symbol, order::Symbol) = getproperty(proxy_of(p), s, order)
+Base.propertynames(p::ModuleProxy) = names(_proxy_of(p))
+Base.hasproperty(p::ModuleProxy, s::Symbol) = isdefined(_proxy_of(p), s)
+Base.getproperty(p::ModuleProxy, s::Symbol) = getproperty(_proxy_of(p), s)
+Base.getproperty(p::ModuleProxy, s::Symbol, order::Symbol) = getproperty(_proxy_of(p), s, order)
 
 DataAPI.metadatasupport(T::Type{<:ModuleProxy}) = getglobal(T()(), SUPPORT)
 
@@ -43,7 +45,7 @@ function DataAPI.metadata(p::ModuleProxy, key::AbstractString; style::Bool=false
     DataAPI.metadata(p, Symbol(key); style=style)
 end
 @inline function DataAPI.metadata(p::ModuleProxy, key::Symbol; style::Bool=false)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).read || throw_read_error(mod)
     if style
         return (getglobal(mod, META)[key], :default)
@@ -55,7 +57,7 @@ function DataAPI.metadata(p::ModuleProxy, key::AbstractString, default; style::B
     DataAPI.metadata(p, Symbol(key), default; style=style)
 end
 @inline function DataAPI.metadata(p::ModuleProxy, key::Symbol, default; style::Bool=false)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).read || throw_read_error(mod)
     if style
         return (get(getglobal(mod, META), key, default), :default)
@@ -64,7 +66,7 @@ end
     end
 end
 function DataAPI.metadatakeys(p::ModuleProxy)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).read || throw_read_error(mod)
     keys(getglobal(mod, META))
 end
@@ -75,17 +77,17 @@ function DataAPI.metadata!(p::ModuleProxy, key::Symbol, value; style::Symbol=:de
     setindex!(getglobal(mod, META), value, key)
 end
 function DataAPI.deletemetadata!(p::ModuleProxy, key::AbstractString)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).write || throw_write_error(mod)
     DataAPI.deletemetadata!(getglobal(mod, META), Symbol(key))
 end
 function DataAPI.deletemetadata!(p::ModuleProxy, key::Symbol)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).write || throw_write_error(mod)
     delete!(getglobal(mod, META), key)
 end
 function DataAPI.emptymetadata!(p::ModuleProxy)
-    mod = proxy_of(p)
+    mod = _proxy_of(p)
     getglobal(mod, SUPPORT).write || throw_write_error(mod)
     empty!(delete!(getglobal(mod, META), key))
 end
@@ -108,7 +110,7 @@ providing access to `mod.This` with subsequent binding to global metadata in the
 """
 function init(m::Module)
     if !isdefined(m, META)
-        Core.eval(m, _this_expr(m))
+        Core.eval(m, Expr(:block, :(const This = $(_this_expr(m))), :(function proxyof end)))
     end
     nothing
 end
@@ -119,27 +121,19 @@ function init(
     write::Bool = false,
 )
     if !isdefined(m, META)
-        Core.eval(m,
-            Expr(:block,
-                _this_expr(m),
-                :(const $(SUPPORT) = $((; read, write))),
-                :(const $(META) = $(md))
-            )
+        Core.eval(m, Expr(:block,
+            :(const This, $(SUPPORT), $(META) = $(_this_expr(m)), $((; read, write)), $(md))),
+            :(function proxyof end)
         )
     else
-        Core.eval(m,
-            Expr(:block,
-                :(const $(SUPPORT) = $((; read, write))),
-                :(const $(META) = $(md))
-            )
-        )
+        Core.eval(m, :(const $(SUPPORT), $(META) = $((; read, write)), $(md)))
     end
     nothing
 end
 Base.show(io::IO, p::ModuleProxy) = show(io, MIME"text/plain"(), p)
 function Base.show(io::IO, m::MIME"text/plain", p::ModuleProxy)
     if isa(p, ModuleProxy)
-        show(io, proxy_of(p))
+        show(io, _proxy_of(p))
         print(io, ".This")
     end
     nothing
