@@ -2,117 +2,113 @@ module GlobalMetadata
 
 using DataAPI
 
+if !isdefined(Base, :getglobal)
+    const getglobal = getfield
+end
+
 const META = gensym(:metadata)
+const SUPPORT = gensym(:support)
 
 # this shouldn't be constructed directly
 # versions below 1.10 don't support the module in the type space.
 # * < v"1.10" `Static` is `nothing` or `() -> mod::Module`
 # * >= v"1.10" `Static` is `nothing` or `mod::Module`
-struct ThisModule{
-    STATIC,
-    D<:Union{Nothing, Module},
-    support
-}
-    dynamic::D
-
-    global function _ThisModule(s, d, support::NamedTuple{(:read, :write), Tuple{Bool, Bool}})
-        new{s, typeof(d), support}(d)
-    end
+struct ModuleProxy{proxy}
+    global _ModuleProxy(p) = new{p}()
 end
+
 @static if VERSION < v"1.10"
-    (tm::ThisModule{STATIC})() where {STATIC} = isa(STATIC, Function) ? STATIC() : getfield(tm, 1)
-    _this_module_expr(m::Module, nt) = :(const This = $(_ThisModule)(() -> $(m), nothing, $(nt)))
+    proxy_of(::ModuleProxy{M}) where {M} = M()::Module
+    _this_expr(m::Module) = :(const This = $(_ModuleProxy)(() -> $(m)))
 else
-    (tm::ThisModule{STATIC})() where {STATIC} = isa(STATIC, Module) ? STATIC : getfield(tm, 1)
-    _this_module_expr(m::Module, nt) = :(const This = $(_ThisModule)($(m), nothing, $(nt)))
+    proxy_of(::ModuleProxy{M}) where {M} = M::Module
+    _this_expr(m::Module) = :(const This = $(_ModuleProxy)($(m)))
 end
 
-@noinline function throw_read_error(m::Module)
-    throw(ArgumentError("Module $(m)'s metadata does not support read access."))
-end
-@noinline function throw_write_error(m::Module)
-    throw(ArgumentError("Module $(m)'s metadata does not support write access."))
-end
+Base.propertynames(p::ModuleProxy) = names(proxy_of(p))
+Base.hasproperty(p::ModuleProxy, s::Symbol) = isdefined(proxy_of(p), s)
+Base.getproperty(p::ModuleProxy, s::Symbol) = getproperty(proxy_of(p), s)
+Base.getproperty(p::ModuleProxy, s::Symbol, order::Symbol) = getproperty(proxy_of(p), s, order)
 
-DataAPI.metadatasupport(::Type{<:ThisModule{<:Any, <:Any, support}}) where {support} = support
-function DataAPI.metadata(tm::ThisModule, key::AbstractString; style::Bool=false)
-    DataAPI.metadata(tm, Symbol(key); style=style)
+DataAPI.metadatasupport(T::Type{<:ModuleProxy}) = getglobal(T()(), SUPPORT)
+
+function DataAPI.metadata(p::ModuleProxy, key::AbstractString; style::Bool=false)
+    DataAPI.metadata(p, Symbol(key); style=style)
 end
-@inline function DataAPI.metadata(tm::ThisModule, key::Symbol; style::Bool=false)
-    mod = tm()
-    DataAPI.metadatasupport(typeof(tm)).read || throw_read_error(mod)
+@inline function DataAPI.metadata(p::ModuleProxy, key::Symbol; style::Bool=false)
     if style
-        return (getfield(mod, META)[key], :default)
+        return (getglobal(proxy_of(p), META)[key], :default)
     else
-        return getfield(mod, META)[key]
+        return getglobal(proxy_of(p), META)[key]
     end
 end
-function DataAPI.metadata(tm::ThisModule, key::AbstractString, default; style::Bool=false)
-    DataAPI.metadata(tm, Symbol(key), default; style=style)
+function DataAPI.metadata(p::ModuleProxy, key::AbstractString, default; style::Bool=false)
+    DataAPI.metadata(p, Symbol(key), default; style=style)
 end
-@inline function DataAPI.metadata(tm::ThisModule, key::Symbol, default; style::Bool=false)
-    mod = tm()
-    DataAPI.metadatasupport(typeof(tm)).read || throw_read_error(mod)
+@inline function DataAPI.metadata(p::ModuleProxy, key::Symbol, default; style::Bool=false)
     if style
-        return (get(mod, key, default), :default)
+        return (get(getglobal(proxy_of(p), META), key, default), :default)
     else
-        return get(mod, key, default)
+        return get(getglobal(proxy_of(p), META), key, default)
     end
 end
-DataAPI.metadatakeys(tm::ThisModule) = keys(getfield(tm(), META))
+DataAPI.metadatakeys(p::ModuleProxy) = keys(getglobal(proxy_of(p), META))
 
-function DataAPI.metadata!(tm::ThisModule, key::AbstractString, value; style::Symbol=:default)
-    DataAPI.metadata!(tm, Symbol(key), value)
+function DataAPI.metadata!(p::ModuleProxy, key::AbstractString, value; style::Symbol=:default)
+    DataAPI.metadata!(p, Symbol(key), value)
 end
-function DataAPI.metadata!(tm::ThisModule, key::Symbol, value; style::Symbol=:default)
-    mod = tm()
-    DataAPI.metadatasupport(typeof(tm)).write || throw_write_error(mod)
-    setindex!(getfield(mod, META), value, key)
+function DataAPI.metadata!(p::ModuleProxy, key::Symbol, value; style::Symbol=:default)
+    setindex!(getglobal(proxy_of(p), META), value, key)
 end
 
-function DataAPI.deletemetadata!(tm::ThisModule, key::AbstractString)
-    DataAPI.deletemetadata!(tm::ThisModule, Symbol(key))
+function DataAPI.deletemetadata!(p::ModuleProxy, key::AbstractString)
+    DataAPI.deletemetadata!(getglobal(proxy_of(p), META), Symbol(key))
 end
-function DataAPI.deletemetadata!(tm::ThisModule, key::Symbol)
-    mod = tm()
-    DataAPI.metadatasupport(typeof(tm)).write || throw_write_error(mod)
-    delete!(getfield(mod, META), key)
-end
-function DataAPI.emptymetadata!(tm::ThisModule)
-    mod = tm()
-    DataAPI.metadatasupport(typeof(tm)).write || throw_write_error(mod)
-    empty!(getfield(mod, META))
-end
+DataAPI.deletemetadata!(p::ModuleProxy, key::Symbol) = delete!(getglobal(proxy_of(p), META), key)
+DataAPI.emptymetadata!(p::ModuleProxy) = empty!(delete!(getglobal(proxy_of(p), META), key))
 
 @nospecialize
-function initmeta(
+function init(m::Module)
+    if !isdefined(m, META)
+        Core.eval(m, _this_expr(m))
+    end
+    nothing
+end
+function init(
     m::Module,
-    md::AbstractDict{Symbol, Any};
+    md::Union{AbstractDict{Symbol, Any}, NamedTuple};
     read::Bool = false,
     write::Bool = false,
 )
     if !isdefined(m, META)
-        Core.eval(m, Expr(:block, _this_module_expr(m, (; read, write)), :(const $(META) = $(md))))
+        Core.eval(m,
+            Expr(:block,
+                _this_expr(m),
+                :(const $(SUPPORT) = $((; read, write))),
+                :(const $(META) = $(md))
+            )
+        )
+    else
+        Core.eval(m,
+            Expr(:block,
+                :(const $(SUPPORT) = $((; read, write))),
+                :(const $(META) = $(md))
+            )
+        )
     end
     nothing
 end
-Base.show(io::IO, tm::ThisModule) = show(io, MIME"text/plain"(), tm)
-function Base.show(io::IO, m::MIME"text/plain", tm::ThisModule)
-    if isa(x, typeof(this))
-        return print(io, "this")
-    elseif isa(x, typeof(This))
-        return print(io, "This")
-    elseif isa(x, ThisModule)
-        show(io, tm()::Module)
-        print(io, " --> this")
+Base.show(io::IO, p::ModuleProxy) = show(io, MIME"text/plain"(), p)
+function Base.show(io::IO, m::MIME"text/plain", p::ModuleProxy)
+    if isa(p, ModuleProxy)
+        show(io, proxy_of(p))
+        print(io, ".This")
     end
     nothing
 end
 
 @specialize
-# GlobalAlias
-# GlobalValue
 
-initmeta(@__MODULE__, IdDict{Symbol, Any}(); read=true, write=true)
+init(@__MODULE__)
 
 end
