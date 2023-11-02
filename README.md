@@ -6,22 +6,20 @@
 [![Coverage](https://codecov.io/gh/Tokazama/GlobalMetadata.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Tokazama/GlobalMetadata.jl)
 
 
-`GlobalMetadata` provides basic tooling for attaching globally stored metadata for objects.
-
-If the type you want to attach metadata to is mutable then each instance has a unique global identifier and you may attach metadata to a global dictionary.
 ```julia
-julia> x = ones(2, 2);
+module DummyScope
+    using DataAPI
+    using GlobalMetadata
+    # initialize global metadata
+    GlobalMetadata.GlobalMetadataDict(@__MODULE__, IdDict{Symbol, Any}())
+    # `__metadata` provides `DummyScope` with private syntax for mutating
+    # global metadata
+    __metadata[:foo] = 1
 
-julia> @metadata!(x, :z, 3);
-
-julia> @metadata(x, :z)
-3
-
-julia> Pair(:x, 1) in @metadata(x)
-true
+    # The metadata interface provided by `DataAPI` serves as a public interface
+    # for reading metadata
+    DataAPI.metadata(@__MODULE__, :foo) == __metadata[:foo] == 1
+    DataAPI.metadata(@__MODULE__, :foo, 1) == get(__metadata, :foo, 1) == 1
+    DataAPI.metadata(@__MODULE__, :bar, 2) == get(__metadata, :bar, 2) == 2
+end
 ```
-
-This is accomplished by assigning a dictionary to a global variable in the current module.
-In the above example, the module's metadata dictionary is given a know key corresponding to `objectid(x)`, which is assigned a `Dict{Symbol,Any}` for storing metadata.
-If this is the first time that any global metadata is being stored, this may also initialize the current module's metadata dictionary.
-However, this package is still in the early stages of development and these are currently considered internal details that could break without notice.

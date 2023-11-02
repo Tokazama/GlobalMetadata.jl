@@ -1,33 +1,14 @@
 using GlobalMetadata
 using Test
 
-@testset "GlobalMetadata" begin
-    x = ones(2, 2)
-    @test_throws ErrorException @metadata(x)
-    xm = @metadata!(x)
-    @metadata!(x, :x, 1)
-    @metadata!(x, :y, 2)
-    @test @metadata(x, :x) == 1
-    @test @metadata(x, :y) == 2
-    @test xm[:x] == 1
-    @test xm[:y] == 2
+module DummyScope
+    using DataAPI
+    using GlobalMetadata
+    using Test
 
-    struct MyType{X}
-        x::X
-    end
-
-    x = MyType(ones(2,2))
-    GC.gc()
-    @test isempty(@metadata!(x))  # test finalizer
-
-    @test @metadata!(x, :x, 1) == 1
-    @test @metadata!(x, :y, 2) == 2
-    x = MyType(1)
-    GC.gc()
-    @test_logs(
-        (:warn, "Cannot create finalizer for MyType{$Int}. Global dictionary must be manually deleted."),
-        @metadata!(x, Dict(:x => 1, :y => 2))
-    )
-    @test @metadata(x, :x) == 1
-    @test @metadata(x, :y) == 2
+    GlobalMetadata.GlobalMetadataDict(@__MODULE__)
+    __metadata[:foo] = 1
+    @test DataAPI.metadata(@__MODULE__, :foo) == __metadata[:foo] == 1
+    @test DataAPI.metadata(@__MODULE__, :foo, 1) == get(__metadata, :foo, 1) == 1
+    @test DataAPI.metadata(@__MODULE__, :bar, 2) == get(__metadata, :bar, 2) == 2
 end

@@ -1,146 +1,124 @@
 module GlobalMetadata
 
 using DataAPI
+using DataAPI: metadatakeys, metadata
 
-if !isdefined(Base, :getglobal)
-    const getglobal = getfield
+#region GlobalMetadataDict
+"""
+    GlobalMetadata.GlobalMetadataDict
+"""
+struct GlobalMetadataDict{G} <: AbstractDict{Symbol, Any}
+    getmeta::G
+
+    global _GlobalMetadataDict(@nospecialize(x)) = new{typeof(x)}(x)
 end
 
-struct Undefined end
+(gmd::GlobalMetadataDict)() = getfield(gmd, 1)()
+Base.parentmodule(gmd::GlobalMetadataDict) = parentmodule(getfield(gmd, 1))
 
-const META = gensym(:metadata)
-const SUPPORT = gensym(:support)
+Base.length(gmd::GlobalMetadataDict) = length(gmd())
 
-# this shouldn't be constructed directly
-# versions below 1.10 don't support the module in the type space.
-# * < v"1.10" `Static` is `nothing` or `() -> mod::Module`
-# * >= v"1.10" `Static` is `nothing` or `mod::Module`
-struct ModuleProxy{proxy}
-    global _ModuleProxy(p) = new{p}()
+Base.iterate(gmd::GlobalMetadataDict) = iterate(gmd())
+Base.iterate(gmd::GlobalMetadataDict, state) = iterate(gmd(), state)
+
+Base.haskey(gmd::GlobalMetadataDict, k::AbstractString) = haskey(gmd, Symbol(k))
+Base.haskey(gmd::GlobalMetadataDict, k::Symbol) = haskey(gmd(), k)
+
+Base.getindex(gmd::GlobalMetadataDict, k::AbstractString) = getindex(gmd, Symbol(k))
+Base.getindex(gmd::GlobalMetadataDict, k::Symbol) = getindex(gmd(), k)
+
+
+Base.get(gmd::GlobalMetadataDict, k::AbstractString, default) = get(gmd, Symbol(k), default)
+Base.get(gmd::GlobalMetadataDict, k::Symbol, default) = get(gmd(), k, default)
+Base.get(f::Union{Function, Type}, gmd::GlobalMetadataDict, k::AbstractString) = get(f, gmd, Symbol(k))
+Base.get(f::Union{Function, Type}, gmd::GlobalMetadataDict, k::Symbol) = get(f, gmd(), k)
+
+Base.setindex!(gmd::GlobalMetadataDict, v, k::AbstractString) = setindex!(gmd, v, Symbol(k))
+Base.setindex!(gmd::GlobalMetadataDict, v, k::Symbol) = setindex!(gmd(), v, k)
+
+Base.delete!(gmd::GlobalMetadataDict, k::AbstractString) = delete!(gmd, Symbol(k))
+Base.delete!(gmd::GlobalMetadataDict, k::Symbol) = delete!(gmd(), k)
+
+#endregion GlobalMetadataDict
+
+#region DataAPI
+DataAPI.metadatakeys(m::Module) = keys(m.__metadata)
+DataAPI.metadatasupport(::Type{Module}) = (; read=true, write=false)
+function DataAPI.metadata(m::Module, key::AbstractString; style::Bool=false)
+    metadata(m, Symbol(key); style=style)
 end
-
-@static if VERSION < v"1.10"
-    _proxy_of(::ModuleProxy{M}) where {M} = M()::Module
-    _this_expr(m::Module) = :($(_ModuleProxy)(() -> $(m)))
-else
-    _proxy_of(::ModuleProxy{M}) where {M} = M::Module
-    _this_expr(m::Module) = :($(_ModuleProxy)($(m)))
-end
-
-Base.propertynames(p::ModuleProxy) = names(_proxy_of(p))
-Base.hasproperty(p::ModuleProxy, s::Symbol) = isdefined(_proxy_of(p), s)
-Base.getproperty(p::ModuleProxy, s::Symbol) = getproperty(_proxy_of(p), s)
-Base.getproperty(p::ModuleProxy, s::Symbol, order::Symbol) = getproperty(_proxy_of(p), s, order)
-
-DataAPI.metadatasupport(T::Type{<:ModuleProxy}) = getglobal(T()(), SUPPORT)
-
-@noinline function throw_read_error(m::Module)
-    throw(ArgumentError("Module $(m)'s metadata does not support read access."))
-end
-@noinline function throw_write_error(m::Module)
-    throw(ArgumentError("Module $(m)'s metadata does not support write access."))
-end
-
-function DataAPI.metadata(p::ModuleProxy, key::AbstractString; style::Bool=false)
-    DataAPI.metadata(p, Symbol(key); style=style)
-end
-@inline function DataAPI.metadata(p::ModuleProxy, key::Symbol; style::Bool=false)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).read || throw_read_error(mod)
+@inline function DataAPI.metadata(m::Module, key::Symbol; style::Bool=false)
     if style
-        return (getglobal(mod, META)[key], :default)
+        return (m.__metadata[key], :default)
     else
-        return getglobal(mod, META)[key]
+        return m.__metadata[key]
     end
 end
-function DataAPI.metadata(p::ModuleProxy, key::AbstractString, default; style::Bool=false)
-    DataAPI.metadata(p, Symbol(key), default; style=style)
+function DataAPI.metadata(m::Module, key::AbstractString, default; style::Bool=false)
+    metadata(m, Symbol(key), default; style=style)
 end
-@inline function DataAPI.metadata(p::ModuleProxy, key::Symbol, default; style::Bool=false)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).read || throw_read_error(mod)
+@inline function DataAPI.metadata(m::Module, key::Symbol, default; style::Bool=false)
     if style
-        return (get(getglobal(mod, META), key, default), :default)
+        return (get(m.__metadata, key, default), :default)
     else
-        return get(getglobal(mod, META), key, default)
+        return get(m.__metadata, key, default)
     end
 end
-function DataAPI.metadatakeys(p::ModuleProxy)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).read || throw_read_error(mod)
-    keys(getglobal(mod, META))
-end
-function DataAPI.metadata!(p::ModuleProxy, key::AbstractString, value; style::Symbol=:default)
-    DataAPI.metadata!(p, Symbol(key), value)
-end
-function DataAPI.metadata!(p::ModuleProxy, key::Symbol, value; style::Symbol=:default)
-    setindex!(getglobal(mod, META), value, key)
-end
-function DataAPI.deletemetadata!(p::ModuleProxy, key::AbstractString)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).write || throw_write_error(mod)
-    DataAPI.deletemetadata!(getglobal(mod, META), Symbol(key))
-end
-function DataAPI.deletemetadata!(p::ModuleProxy, key::Symbol)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).write || throw_write_error(mod)
-    delete!(getglobal(mod, META), key)
-end
-function DataAPI.emptymetadata!(p::ModuleProxy)
-    mod = _proxy_of(p)
-    getglobal(mod, SUPPORT).write || throw_write_error(mod)
-    empty!(delete!(getglobal(mod, META), key))
-end
+#endregion DataAPI
+
+const G_VAR = gensym(:g_var)
+const G_GET = gensym(:g_get)
 
 @nospecialize
+
 """
-    GlobalMetadata.init(mod::Module[, md::AbstractDict{Symbol}; read::Bool=true, write::Bool=false])
+    GlobalMetadata.GlobalMetadataDict(g::Module, md::AbstractDict{Symbol}=IdDict{Symbol, Any}())
 
-Creates a constant global variable within `mod` to `This` (i.e., `mod.This`) whose value is
-an instance of `ModuleProxy`. `mod.This` acts as a proxy for `mod` (`propertynames(mod) ==
-propertynames(mod.This)`, `getproperty(mod, name) == getproperty(mod.This, name)`), The
-instance of `This` generated is unique to `mod` without direclty storing any field data.
+Assigns a dictionary of type `GlobalMetadataDict` to `g.__metadata`.
+`g.__metadata` serves as an proxy for `md`, which is stored in a hidden global state.
+`GlobalMetadataDict` supports the `AbstractDict` interface, providing access to `md`.
 
-If the metadata argument is present, `md` will be made accessible through the metadata API
-provided by the `DataAPI` package (e.g., `DataAPI.metadata(mod.This, key)`). The keyword
-arguments (`read`, `write`) are used to specify what metadata accessing methods are supported.
-
-`GlobalMetadata.init(mod)` and `GlobalMetadata.init(mod, md; read write)` may be called seperately,
-providing access to `mod.This` with subsequent binding to global metadata in the module.
+Metadata functions from the `DataAPI` package also provide public access
+(`metadata(g, key)`). However, mutating methods such as `DataAPI.metadata!` are not
+supported in order to discourage outside mutation of module metadata.
 """
-function init(m::Module)
-    if !isdefined(m, META)
-        Core.eval(m, Expr(:block, :(const This = $(_this_expr(m))), :(function proxyof end)))
-    end
-    nothing
-end
-function init(
-    m::Module,
-    md::Union{AbstractDict{Symbol}, NamedTuple};
-    read::Bool = true,
-    write::Bool = false,
-)
-    if !isdefined(m, META)
-        Core.eval(m, Expr(:block,
-            :(const This, $(SUPPORT), $(META) = $(_this_expr(m)), $((; read, write)), $(md))),
-            :(function proxyof end)
+function GlobalMetadataDict(mod::Module, md::AbstractDict{Symbol}=IdDict{Symbol, Any}())
+    if !isdefined(mod, :__metadata)
+        Core.eval(mod,
+            quote
+                const $(G_VAR) = $(md)
+                $(G_GET)() = $(G_VAR)
+                const __metadata = $(_GlobalMetadataDict)($(G_GET))
+            end
         )
-    else
-        Core.eval(m, :(const $(SUPPORT), $(META) = $((; read, write)), $(md)))
     end
-    nothing
-end
-Base.show(io::IO, p::ModuleProxy) = show(io, MIME"text/plain"(), p)
-function Base.show(io::IO, m::MIME"text/plain", p::ModuleProxy)
-    if isa(p, ModuleProxy)
-        show(io, _proxy_of(p))
-        print(io, ".This")
-    end
-    nothing
 end
 
+@noinline function Base.showarg(io::IO, gmd::GlobalMetadataDict, toplevel::Bool)
+    toplevel || print(io, "::")
+    show(io, parentmodule(gmd))
+    print(io, ".__metadata")
+    nothing
+end
+function Base.show(io::IO, gmd::GlobalMetadataDict)
+    summary(io, gmd)
+    if !isempty(gmd)
+        show(io, MIME"text/plain"(), gmd)
+    end
+    nothing
+end
 @specialize
 
-init(@__MODULE__)
+GlobalMetadataDict(@__MODULE__)
 
 end
+
+# `g.__metadata` serves as
+# whose value is an instance of `GlobalMetadataDict`.
+
+# `g.__metadata` acts as a proxy for `mod` (`propertynames(mod) ==
+# propertynames(mod.__metadata)`, `getproperty(mod, name) == getproperty(mod.__metadata, name)`), The
+# instance of `__metadata` generated is unique to `mod` without direclty storing any field data.
+
+# If the metadata argument is present, `md` will be accessible through the metadata API
+# provided by the `DataAPI` package (e.g., `DataAPI.metadata(mod, key)`).
